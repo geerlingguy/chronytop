@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package main
 
 import (
@@ -16,7 +18,7 @@ func ioctl(fd, req uintptr, arg unsafe.Pointer) error {
 // makeRaw puts the terminal in raw mode and returns the previous state.
 func makeRaw(fd uintptr) (*syscall.Termios, error) {
 	var old syscall.Termios
-	if err := ioctl(fd, syscall.TCGETS, unsafe.Pointer(&old)); err != nil { // #nosec G103 -- ioctl needs a struct pointer.
+	if err := ioctl(fd, ioctlGetTermios, unsafe.Pointer(&old)); err != nil { // #nosec G103 -- ioctl needs a struct pointer.
 		return nil, err
 	}
 	t := old
@@ -28,14 +30,14 @@ func makeRaw(fd uintptr) (*syscall.Termios, error) {
 	t.Cflag |= syscall.CS8
 	t.Cc[syscall.VMIN] = 1
 	t.Cc[syscall.VTIME] = 0
-	if err := ioctl(fd, syscall.TCSETS, unsafe.Pointer(&t)); err != nil { // #nosec G103 -- ioctl needs a struct pointer.
+	if err := ioctl(fd, ioctlSetTermios, unsafe.Pointer(&t)); err != nil { // #nosec G103 -- ioctl needs a struct pointer.
 		return nil, err
 	}
 	return &old, nil
 }
 
 func restore(fd uintptr, t *syscall.Termios) {
-	_ = ioctl(fd, syscall.TCSETS, unsafe.Pointer(t)) // #nosec G103 -- ioctl needs a struct pointer.
+	_ = ioctl(fd, ioctlSetTermios, unsafe.Pointer(t)) // #nosec G103 -- ioctl needs a struct pointer.
 }
 
 func termSize(fd uintptr) (w, h int) {
