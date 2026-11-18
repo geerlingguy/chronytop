@@ -22,7 +22,9 @@ jobs:
         run: test -z "$(gofmt -l .)"
 
       - name: Vet.
-        run: go vet ./...
+        run: |
+          go vet ./...
+          GOOS=darwin go vet ./...
 
       - name: Staticcheck.
         run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
@@ -34,8 +36,11 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -44,11 +49,17 @@ jobs:
       - run: go test -race ./...
 
   build:
-    name: Build (${{ matrix.arch }})
+    name: Build (${{ matrix.os }}-${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        os: [linux]
         arch: [amd64, arm64, arm, 386, riscv64]
+        include:
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -58,14 +69,14 @@ jobs:
       - name: Build static binary.
         env:
           CGO_ENABLED: '0'
-          GOOS: linux
+          GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           GOARM: '7'
         run: |
           go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" \
-            -o chronytop-linux-${{ matrix.arch }} .
+            -o chronytop-${{ matrix.os }}-${{ matrix.arch }} .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: chronytop-linux-${{ matrix.arch }}
-          path: chronytop-linux-${{ matrix.arch }}
+          name: chronytop-${{ matrix.os }}-${{ matrix.arch }}
+          path: chronytop-${{ matrix.os }}-${{ matrix.arch }}

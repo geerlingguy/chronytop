@@ -21,13 +21,14 @@ jobs:
       - name: Build static binaries.
         env:
           CGO_ENABLED: '0'
-          GOOS: linux
           GOARM: '7'
         run: |
           mkdir dist
-          for arch in amd64 arm64 arm 386 riscv64; do
-            GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-              -o dist/chronytop-linux-$arch .
+          for target in linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64 \
+              darwin/amd64 darwin/arm64; do
+            os=${target%/*} arch=${target#*/}
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -o "dist/chronytop-$os-$arch" .
           done
           cd dist && sha256sum chronytop-* > SHA256SUMS
 
