@@ -12,7 +12,7 @@ Panels resize with the terminal, and can be shown or hidden.
 
 ## Requirements
 
-- Linux, with chrony 4.0 or later (`/usr/bin/chronyc`)
+- Linux or macOS, with chrony 4.0 or later (`chronyc` in `/usr/bin`, `/usr/local/bin`, or `/opt/homebrew/bin`)
 - Root (or `sudo`) for the server and offenders panels, or see [Running without root](#running-without-root)
 
 chronytop is a single static binary with no dependencies outside the Go standard library, so it runs on any distribution (Debian, Ubuntu, Fedora, RHEL, Arch, Alpine, etc.).
@@ -24,6 +24,15 @@ Download the binary for your architecture from [Releases](https://github.com/gee
 ```
 sudo install -o root -g root -m 755 chronytop-linux-amd64 /usr/local/bin/chronytop
 ```
+
+On macOS, use `chronytop-darwin-arm64` (Apple silicon) or `chronytop-darwin-amd64` (Intel). The binaries aren't signed, so clear the download quarantine flag before installing:
+
+```
+xattr -d com.apple.quarantine chronytop-darwin-arm64
+sudo install -o root -g wheel -m 755 chronytop-darwin-arm64 /usr/local/bin/chronytop
+```
+
+`SHA256SUMS` in each release lists checksums for verifying downloads; it isn't a binary.
 
 Or build it from source with Go 1.24 or later:
 
@@ -85,7 +94,7 @@ Debian and Ubuntu create the directory with mode `0700` (`drwx------`), so this 
 
 Since it usually runs as root, chronytop:
 
-- Only reads from `/proc` and `chronyc`, and never opens network connections.
+- Only reads from `/proc` and `chronyc` (on macOS, `ps`, `pgrep`, `netstat`, `route`, `vm_stat`, and `sysctl` instead of `/proc`), and never opens network connections.
 - Only writes its settings file, and only if you changed a setting. It skips the file and its directories unless they're owned by the user running chronytop (so a non-root `HOME` under `sudo` is ignored), and saves through a temporary file, so it never follows a symlink.
 - Runs `/usr/bin/chronyc` by absolute path, with a minimal environment and no shell.
 - Strips non-printable characters from everything it displays, so data from chrony can't inject terminal escape sequences.
