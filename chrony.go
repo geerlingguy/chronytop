@@ -2,14 +2,25 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Absolute path, so a modified PATH can't swap in another binary when run with sudo.
-const chronycPath = "/usr/bin/chronyc"
+// Fixed absolute paths, so a modified PATH can't swap in another binary when run with sudo.
+// The others are where Homebrew and source installs put chronyc on macOS.
+var chronycPath = firstExisting("/usr/bin/chronyc", "/usr/local/bin/chronyc", "/opt/homebrew/bin/chronyc")
+
+func firstExisting(paths ...string) string {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return paths[0]
+}
 
 // chronyc runs a chronyc command and returns its CSV output as rows of fields.
 func chronyc(timeout time.Duration, args ...string) ([][]string, error) {
