@@ -74,11 +74,24 @@ func safeDir(path string, create bool) bool {
 	return err == nil && fi.IsDir() && ownedBy(fi)
 }
 
+// userConfigDir is $XDG_CONFIG_HOME or ~/.config on every platform, unlike os.UserConfigDir,
+// which uses ~/Library/Application Support on macOS.
+func userConfigDir() (string, error) {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(dir) {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config"), nil
+}
+
 // configDir returns the settings directory, or "" if it's missing or not safe to use. When run
 // with sudo and a non-root HOME, the user's directories fail the ownership check, so nothing is
 // read or written there as root.
 func configDir(create bool) string {
-	base, err := os.UserConfigDir()
+	base, err := userConfigDir()
 	if err != nil {
 		return ""
 	}
