@@ -43,6 +43,60 @@ jobs:
           go-version-file: go.mod
       - run: go test -race ./...
 
+  chronyd:
+    name: chronyd (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - debian:12  # chrony 4.3
+          - debian:13  # chrony 4.6
+          - archlinux:latest  # newest chrony release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build integration test binary.
+        env:
+          CGO_ENABLED: '0'
+        run: go test -c -o chronytop-integration.test .
+      - name: Install the distribution's chronyd package in a test image.
+        run: |
+          docker build --tag chronytop-integration \
+            --build-arg 'BASE_IMAGE=${{ matrix.image }}' - <<'DOCKERFILE'
+          ARG BASE_IMAGE=debian:13
+          FROM ${BASE_IMAGE}
+          # Prevent package installation from starting chronyd. Debian also
+          # needs policy-rc.d for service actions outside systemd.
+          RUN mkdir -p /etc/systemd/system && \
+              ln -sf /dev/null /etc/systemd/system/chrony.service && \
+              ln -sf /dev/null /etc/systemd/system/chronyd.service
+          RUN if command -v apt-get >/dev/null; then \
+                printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && \
+                chmod 755 /usr/sbin/policy-rc.d && \
+                apt-get update && \
+                DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends chrony; \
+              else \
+                pacman --sync --refresh --sysupgrade --noconfirm chrony; \
+              fi
+          DOCKERFILE
+      - name: Test chronyd with external networking disabled.
+        # Only loopback exists in this container. Each test starts its own
+        # daemon with -x and isolated configuration; no clock access is needed.
+        run: |
+          docker run --rm --network none \
+            --volume "$PWD/chronytop-integration.test:/test/chronytop.test:ro" \
+            --entrypoint /bin/sh chronytop-integration -ec '
+              export CHRONYTOP_TEST_CHRONYD="$(command -v chronyd)"
+              test -n "$CHRONYTOP_TEST_CHRONYD"
+              /test/chronytop.test -test.run="^TestChronydIntegration$" -test.v -test.timeout=60s
+            '
+
   build:
     name: Build (${{ matrix.arch }})
     runs-on: ubuntu-latest

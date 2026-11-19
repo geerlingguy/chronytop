@@ -2,11 +2,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -42,25 +46,58 @@ type App struct {
 	minPackets int
 	help       bool
 	host       string
+	network    string
+	address    string
+	fallback   bool
 }
 
 func main() {
 	interval := flag.Duration("i", time.Second, "sample interval (500ms to 10s)")
 	minPackets := flag.Int("p", 100, "minimum packets for a client to be listed in offenders")
+	socketPath := flag.String("socket", defaultSocket, "absolute path to chronyd's Unix command socket")
+	udpHost := flag.String("host", "", "monitor chronyd over UDP: hostname, IP, or host:port (default port 323)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("chronytop", version)
 		return
 	}
-	if *minPackets < 0 {
-		fmt.Fprintln(os.Stderr, "chronytop: -p must be 0 or more")
+	if *minPackets < 0 || uint64(*minPackets) > math.MaxUint32 {
+		fmt.Fprintln(os.Stderr, "chronytop: -p must fit an unsigned 32-bit integer")
 		os.Exit(2)
+	}
+	intervalFlag, socketFlag := false, false
+	flag.Visit(func(f *flag.Flag) {
+		intervalFlag = intervalFlag || f.Name == "i"
+		socketFlag = socketFlag || f.Name == "socket"
+	})
+	network, address, err := monitorAddress(*socketPath, *udpHost, socketFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "chronytop:", err)
+		os.Exit(2)
+	}
+	fallback := false
+	if network == "unixgram" && !socketFlag {
+		// Like chronyc, use localhost UDP when the default socket isn't accessible.
+		if c, err := openChrony(address); err == nil {
+			c.Close()
+		} else if errors.Is(err, os.ErrPermission) {
+			network, address, fallback = "udp", "127.0.0.1:323", true
+		}
 	}
 
 	host, _ := os.Hostname()
+	iface := ""
+	if isRemote(network, address) {
+		host = address
+	} else {
+		iface = defaultIface()
+	}
 	app := &App{
-		stats:      Stats{Iface: defaultIface()},
+		stats:      Stats{Iface: iface},
+		network:    network,
+		address:    address,
+		fallback:   fallback,
 		visible:    map[string]bool{},
 		interval:   min(maxInterval, max(minInterval, *interval)),
 		minPackets: *minPackets,
@@ -69,8 +106,6 @@ func main() {
 	for _, p := range panels {
 		app.visible[p.key] = true
 	}
-	intervalFlag := false
-	flag.Visit(func(f *flag.Flag) { intervalFlag = intervalFlag || f.Name == "i" })
 	if saved, ok := loadSettings(); ok {
 		if saved.Shown != nil {
 			for _, p := range panels {
@@ -115,24 +150,38 @@ type clientsResult struct {
 }
 
 func (a *App) run() {
+	ctx, cancel := context.WithCancel(context.Background())
+	sampler := &chronySession{network: a.network, address: a.address, fallback: a.fallback}
+	clientSession := &chronySession{network: a.network, address: a.address, fallback: a.fallback}
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		workers.Wait()
+		sampler.Close()
+		clientSession.Close()
+	}()
 	keys := make(chan byte, 16)
 	go readKeys(keys)
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
 	results := make(chan clientsResult, 1)
 	fetching, nextClients := false, time.Time{}
 	minPackets := a.minPackets
 	timer := time.NewTimer(0)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-timer.C:
-			a.stats.Sample()
+			a.stats.Sample(ctx, sampler)
 			// The client list can be long, so fetch it in the background and less often.
 			if !fetching && a.visible["3"] && time.Now().After(nextClients) {
 				fetching = true
+				workers.Add(1)
 				go func() {
-					c, err := fetchClients(minPackets)
+					defer workers.Done()
+					c, err := clientSession.clients(ctx, minPackets)
 					results <- clientsResult{c, err}
 				}()
 			}
@@ -190,9 +239,13 @@ func (a *App) handleKey(k byte) bool {
 	case '-':
 		a.interval = max(minInterval, a.interval/2)
 	default:
-		if _, ok := a.visible[string(k)]; ok {
+		if _, ok := a.visible[string(k)]; ok && a.panelAvailable(string(k)) {
 			a.visible[string(k)] = !a.visible[string(k)]
 		}
 	}
 	return false
+}
+
+func (a *App) panelAvailable(key string) bool {
+	return !isRemote(a.network, a.address) || (key != "6" && key != "7")
 }

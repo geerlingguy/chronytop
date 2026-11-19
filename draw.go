@@ -29,7 +29,7 @@ func (a *App) draw(w, h int) {
 	inner := w/len(cols) - 4
 	content := map[string][]line{}
 	for key, build := range textPanels {
-		if a.visible[key] {
+		if a.visible[key] && a.panelAvailable(key) {
 			content[key] = build(&a.stats, inner)
 		}
 	}
@@ -115,8 +115,14 @@ func title(key string) string {
 }
 
 func (a *App) header(w int) {
-	left := fmt.Sprintf(" chronytop  %s  up %s  load %s  %s", a.host, fmtDur(uptime()), loadAvg(),
-		time.Now().UTC().Format("15:04:05 UTC"))
+	left := fmt.Sprintf(" chronytop  %s", a.host)
+	if a.network == "udp" {
+		left += "  UDP"
+	}
+	if !isRemote(a.network, a.address) {
+		left += fmt.Sprintf("  up %s  load %s", fmtDur(uptime()), loadAvg())
+	}
+	left += "  " + time.Now().UTC().Format("15:04:05 UTC")
 	right := fmt.Sprintf("+/- %s  ? help  q quit ", a.interval)
 	a.scr.Put(0, 0, left, bold, w)
 	if len(left)+len(right)+2 <= w {
@@ -126,6 +132,10 @@ func (a *App) header(w int) {
 
 func (a *App) requests(y, h, w int) {
 	st := &a.stats
+	if st.ServerErr != nil {
+		a.panel(y, 0, h, w, "1", "requests", unavailable("Request counters", st.ServerErr))
+		return
+	}
 	vis := st.Req
 	if len(vis) > w-2 {
 		vis = vis[len(vis)-(w-2):]
@@ -149,6 +159,9 @@ func (a *App) requests(y, h, w int) {
 func (a *App) drawHelp(w, h int) {
 	lines := []line{{{fmt.Sprintf("%-8s", "Key"), bold}, {"Action", bold}}}
 	for _, p := range panels {
+		if !a.panelAvailable(p.key) {
+			continue
+		}
 		lines = append(lines, line{{fmt.Sprintf("%-8s", p.key), magenta}, {"Show/hide " + p.title, plain}})
 	}
 	for _, kv := range [][2]string{

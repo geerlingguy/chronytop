@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -16,6 +18,8 @@ const (
 
 // Stats holds the latest samples and history.
 type Stats struct {
+	TrackingErr, SourcesErr, ServerErr error
+
 	Iface      string
 	Req, Drop  []float64
 	Tracking   *Tracking
@@ -46,28 +50,25 @@ type snapshot struct {
 }
 
 // Sample takes one sample of everything except the client list.
-func (s *Stats) Sample() {
+func (s *Stats) Sample(ctx context.Context, session *chronySession) {
 	now := time.Now()
-	rows, _ := chronyc(2*time.Second, "tracking")
-	s.Tracking = parseTracking(rows)
-	rows, _ = chronyc(2*time.Second, "sources")
-	s.Sources = parseSources(rows)
-	rows, _ = chronyc(2*time.Second, "serverstats")
-	s.Server = parseServerStats(rows)
-	s.Net = netCounters(s.Iface)
-
-	snap := &snapshot{at: now, server: s.Server, net: s.Net}
-	snap.cpuBusy, snap.cpuTotal = cpuTicks()
-	if s.chronydPID == "" {
-		s.chronydPID = findPID("chronyd")
+	s.sampleChrony(ctx, session)
+	snap := &snapshot{at: now, server: s.Server}
+	if !isRemote(session.network, session.address) {
+		s.Net = netCounters(s.Iface)
+		snap.net = s.Net
+		snap.cpuBusy, snap.cpuTotal = cpuTicks()
+		if s.chronydPID == "" {
+			s.chronydPID = findPID("chronyd")
+		}
+		if secs, rss, ok := procUsage(s.chronydPID); ok {
+			snap.chronydSecs, snap.chronydFound, s.ChronydRSS = secs, true, rss
+		} else {
+			s.chronydPID, s.ChronydRSS = "", 0
+		}
+		snap.ownSecs = ownCPUSeconds()
+		s.MemTotal, s.MemUsed = memInfo()
 	}
-	if secs, rss, ok := procUsage(s.chronydPID); ok {
-		snap.chronydSecs, snap.chronydFound, s.ChronydRSS = secs, true, rss
-	} else {
-		s.chronydPID, s.ChronydRSS = "", 0
-	}
-	snap.ownSecs = ownCPUSeconds()
-	s.MemTotal, s.MemUsed = memInfo()
 
 	if p := s.prev; p != nil {
 		dt := now.Sub(p.at).Seconds()
@@ -101,13 +102,19 @@ func appendCapped(v []float64, x float64) []float64 {
 	return v
 }
 
-// fetchClients returns clients with at least minPackets packets, filtered inside chronyd.
-func fetchClients(minPackets int) ([]Client, error) {
-	rows, err := chronyc(10*time.Second, "clients", "-p", strconv.Itoa(minPackets))
-	if err != nil {
-		return nil, err
+func (s *Stats) sampleChrony(ctx context.Context, session *chronySession) {
+	s.Tracking, s.Sources, s.Server = nil, nil, nil
+	queried := false
+	err := session.run(ctx, 2*time.Second, func(c *chronySocket) error {
+		queried = true
+		s.Tracking, s.TrackingErr = c.Tracking()
+		s.Sources, s.SourcesErr = c.Sources()
+		s.Server, s.ServerErr = c.ServerStats()
+		return errors.Join(s.TrackingErr, s.SourcesErr, s.ServerErr)
+	})
+	if !queried {
+		s.TrackingErr, s.SourcesErr, s.ServerErr = err, err, err
 	}
-	return parseClients(rows), nil
 }
 
 func readFile(path string) string {
@@ -201,16 +208,12 @@ func procUsage(pid string) (secs, rss float64, ok bool) {
 	return (num(f[11]) + num(f[12])) / clockTicks, num(f[21]) * float64(os.Getpagesize()), true
 }
 
-// ownCPUSeconds includes the chronyc processes chronytop runs.
 func ownCPUSeconds() float64 {
-	var total float64
-	for _, who := range []int{syscall.RUSAGE_SELF, syscall.RUSAGE_CHILDREN} {
-		var ru syscall.Rusage
-		if syscall.Getrusage(who, &ru) == nil {
-			total += float64(ru.Utime.Nano()+ru.Stime.Nano()) / 1e9
-		}
+	var ru syscall.Rusage
+	if syscall.Getrusage(syscall.RUSAGE_SELF, &ru) == nil {
+		return float64(ru.Utime.Nano()+ru.Stime.Nano()) / 1e9
 	}
-	return total
+	return 0
 }
 
 func loadAvg() string {

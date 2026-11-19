@@ -68,7 +68,7 @@ func last(v []float64) float64 {
 func serverLines(st *Stats, _ int) []line {
 	s := st.Server
 	if len(s) < 2 {
-		return []line{{{"chronyc serverstats unavailable (run with sudo)", red}}}
+		return unavailable("Server statistics", st.ServerErr)
 	}
 	drop := last(st.Drop)
 	dropSt, totalSt, pct := plain, plain, 0.0
@@ -94,7 +94,7 @@ func serverLines(st *Stats, _ int) []line {
 	return lines
 }
 
-// Counters from chronyc -c serverstats; older chrony versions print fewer fields (4.0 has 8).
+// Counters in chronyc report order; older chrony versions provide fewer fields (4.0 has 8).
 var serverStatsFields = []struct {
 	index int
 	label string
@@ -107,7 +107,7 @@ func offenderLines(st *Stats, w, maxRows, minPackets int) []line {
 	case st.ClientsAt.IsZero():
 		return []line{{{"Loading clients…", dim}}}
 	case st.ClientsErr != nil:
-		return []line{{{"chronyc clients unavailable (run with sudo)", red}}}
+		return unavailable("Clients", st.ClientsErr)
 	case len(st.Clients) == 0:
 		return []line{{{fmt.Sprintf("No clients with ≥%d packets", minPackets), dim}}}
 	}
@@ -155,8 +155,11 @@ func offenderLines(st *Stats, w, maxRows, minPackets int) []line {
 }
 
 func sourcesLines(st *Stats, w int) []line {
+	if st.SourcesErr != nil {
+		return unavailable("Sources", st.SourcesErr)
+	}
 	if len(st.Sources) == 0 {
-		return []line{{{"chronyc sources unavailable", red}}}
+		return []line{{{"No sources", dim}}}
 	}
 	width := nameWidth(w-40, func(yield func(string) bool) {
 		for _, s := range st.Sources {
@@ -206,7 +209,7 @@ func sourcesLines(st *Stats, w int) []line {
 func trackingLines(st *Stats, _ int) []line {
 	t := st.Tracking
 	if t == nil {
-		return []line{{{"chronyc tracking unavailable", red}}}
+		return unavailable("Tracking", st.TrackingErr)
 	}
 	leapSt := red
 	if t.Leap == "Normal" {
@@ -226,6 +229,14 @@ func trackingLines(st *Stats, _ int) []line {
 		kv("Root delay", fmtSecs(t.RootDelay, false), plain),
 		kv("Root dispersion", fmtSecs(t.RootDispersion, false), plain),
 	}
+}
+
+func unavailable(label string, err error) []line {
+	lines := []line{{{label + " unavailable", red}}}
+	if err != nil {
+		lines = append(lines, line{{clean(err.Error()), red}})
+	}
+	return lines
 }
 
 func netLines(st *Stats, _ int) []line {
