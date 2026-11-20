@@ -43,7 +43,7 @@ sudo chronytop
 | --- | --- | --- |
 | `-i` | `1s` | Sample interval (500ms to 10s) |
 | `-p` | `100` | Minimum packets for a client to be listed in offenders |
-| `-socket` | `/var/run/chrony/chronyd.sock` | chronyd's Unix command socket |
+| `-socket` | `/var/run/chrony/chronyd.sock` | chronyd's Unix command socket (if chronyd's is elsewhere, e.g. under `/opt` with Entware) |
 | `-host` | | Monitor chronyd over UDP instead: host, `host:port` or `[IPv6]:port` (default port 323) |
 | `-version` | | Print the version and exit |
 
@@ -73,7 +73,7 @@ opencommands activity manual rtcdata smoothing sourcename sources sourcestats tr
 
 ## Running without root
 
-Without access to chronyd's default Unix socket, chronytop uses UDP on localhost, like `chronyc`. That shows everything except the server and offenders panels, since chronyd only answers `serverstats` and `clients` over UDP if allowed:
+If chronyd's Unix socket isn't at the default path or isn't accessible, chronytop uses UDP on localhost, like `chronyc`. That shows everything except the server and offenders panels, since chronyd only answers `serverstats` and `clients` over UDP if allowed:
 
 **chrony 4.7 or later:** add the `opencommands` line above to `chrony.conf` (`/etc/chrony/chrony.conf` on Debian and Ubuntu, `/etc/chrony.conf` elsewhere), restart chronyd, and run `chronytop` as any user. Only localhost can send these queries unless `cmdallow` says otherwise.
 

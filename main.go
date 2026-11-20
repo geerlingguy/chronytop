@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -78,10 +77,10 @@ func main() {
 	}
 	fallback := false
 	if network == "unixgram" && !socketFlag {
-		// Like chronyc, use localhost UDP when the default socket isn't accessible.
+		// Like chronyc, use localhost UDP when the default socket isn't usable.
 		if c, err := openChrony(address); err == nil {
 			c.Close()
-		} else if errors.Is(err, os.ErrPermission) {
+		} else {
 			network, address, fallback = "udp", "127.0.0.1:323", true
 		}
 	}
