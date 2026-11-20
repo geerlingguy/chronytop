@@ -366,7 +366,7 @@ type chronyCommandError struct {
 func (e *chronyCommandError) Error() string {
 	message := chronyStatus(e.status)
 	if e.status == 2 && e.fallback {
-		message = "not authorised over UDP (use sudo)"
+		message = "not authorised over UDP (use sudo, or -socket if it's elsewhere)"
 	} else if e.status == 2 && e.udp {
 		message = "not authorised over UDP (check chronyd cmdallow/opencommands)"
 	}
