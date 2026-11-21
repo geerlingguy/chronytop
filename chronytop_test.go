@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +104,75 @@ func TestAddServerRates(t *testing.T) {
 	s.addServerRates([]float64{5, 0, 0, 0, 0, 0, 0, 1}, prev, 1)
 	if len(s.Req) != 1 || len(s.Auth) != 1 {
 		t.Errorf("reset sample was recorded: %v %v", s.Req, s.Auth)
+	}
+}
+
+func TestGraphStacksPart(t *testing.T) {
+	var s Screen
+	// Bars are right-aligned in columns 2-4, clear of the axis labels. Each is 2 rows tall:
+	// all NTP, half NTS, all NTS.
+	s.Reset(5, 2)
+	s.Graph(0, 0, 2, 5, []float64{10, 10, 10}, []float64{0, 5, 10}, green, cyan)
+	at := func(y, x int) cell { return s.cells[y*s.W+x] }
+	for _, c := range []struct {
+		y, x int
+		want Style
+	}{
+		{1, 2, green}, {0, 2, green},
+		{1, 3, cyan}, {0, 3, green}, // NTS fills the bottom row
+		{1, 4, cyan}, {0, 4, cyan},
+	} {
+		if got := at(c.y, c.x).st; got != c.want {
+			t.Errorf("cell %d,%d style %+v, want %+v", c.y, c.x, got, c.want)
+		}
+	}
+
+	// A split inside a full cell uses a background color for the rest of the cell.
+	s.Reset(5, 1)
+	s.Graph(0, 0, 1, 5, []float64{8}, []float64{3}, green, cyan)
+	if c := at(0, 4); c.r != '▃' || c.st != (Style{FG: cyan.FG, BG: green.FG + 10}) {
+		t.Errorf("split cell = %q %+v", c.r, c.st)
+	}
+}
+
+func TestRequestsHeaderNTS(t *testing.T) {
+	row := func(s *Screen, y int) string {
+		var b []rune
+		for _, c := range s.cells[y*s.W : (y+1)*s.W] {
+			b = append(b, c.r)
+		}
+		return string(b)
+	}
+	for _, tc := range []struct {
+		name   string
+		server []float64
+		auth   []float64
+		want   string // "" means no NTS figure
+	}{
+		{"no NTS configured", []float64{100, 0, 0, 0, 0, 0, 0, 0}, []float64{0}, ""},
+		{"chrony without the counter", []float64{100, 0}, nil, ""},
+		{"NTS traffic", []float64{100, 0, 0, 0, 0, 3, 0, 40}, []float64{4}, "NTS 4.0/s 40%"},
+		// NTS that stopped long ago (scrolled off the graph) is hidden again...
+		{"old NTS", []float64{100, 0, 0, 0, 0, 3, 0, 40}, append([]float64{4}, make([]float64, 200)...), ""},
+		// ...but NTS still on screen keeps the figure, even if the latest sample has none.
+		{"recent NTS", []float64{100, 0, 0, 0, 0, 3, 0, 40}, []float64{4, 0}, "NTS 0/s 0%"},
+	} {
+		req := make([]float64, len(tc.auth))
+		for i := range req {
+			req[i] = 10
+		}
+		if len(req) == 0 {
+			req = []float64{10}
+		}
+		a := &App{interval: time.Second, stats: Stats{Server: tc.server, Req: req, Auth: tc.auth}}
+		a.scr.Reset(120, 8)
+		a.requests(0, 8, 120)
+		header := row(&a.scr, 0)
+		if !strings.Contains(header, "10 req/s  avg") && tc.want == "" {
+			t.Errorf("%s: header %q", tc.name, header)
+		}
+		if tc.want != "" && !strings.Contains(header, "10 req/s  "+tc.want+"  avg") {
+			t.Errorf("%s: header %q, want %q", tc.name, header, tc.want)
+		}
 	}
 }

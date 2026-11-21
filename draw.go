@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -150,11 +151,44 @@ func (a *App) requests(y, h, w int) {
 		avg = sum / float64(len(vis))
 	}
 	span := time.Duration(w-2) * a.interval
-	extra := fmt.Sprintf(" %s req/s  avg %s  peak %s  drop %s/s  (%s) ", fmtSI(last(st.Req), ""),
+	// Show the NTS figure only while NTS requests are in the visible graph, so it appears
+	// when NTS traffic starts and servers without NTS look as before.
+	nts := ""
+	if anyPositive(st.Auth, len(vis)) {
+		pct := 0.0
+		if r := last(st.Req); r > 0 {
+			pct = last(st.Auth) / r * 100
+		}
+		nts = fmt.Sprintf("NTS %s/s %.0f%%", fmtSI(last(st.Auth), ""), pct)
+	}
+	ntsPart := ""
+	if nts != "" {
+		ntsPart = nts + "  "
+	}
+	extra := fmt.Sprintf(" %s req/s  %savg %s  peak %s  drop %s/s  (%s) ", fmtSI(last(st.Req), ""), ntsPart,
 		fmtSI(avg, ""), fmtSI(peak, ""), fmtSI(last(st.Drop), ""), fmtDur(span.Seconds()))
 	a.scr.Box(y, 0, h, w, "1", "requests", extra)
-	a.scr.Graph(y+1, 1, h-2, w-2, st.Req)
+	// The NTS figure doubles as the legend for the graph's NTS shade. Box only draws extra
+	// when it fits, so check the same condition.
+	if n := len([]rune(extra)); nts != "" && n+len("requests")+8 < w {
+		i := len([]rune(extra[:strings.Index(extra, nts)]))
+		a.scr.Put(y, w-n-3+i, nts, ntsStyle, -1)
+	}
+	a.scr.Graph(y+1, 1, h-2, w-2, st.Req, st.Auth, green, ntsStyle)
 }
+
+// anyPositive reports whether any of the last n values is above zero.
+func anyPositive(v []float64, n int) bool {
+	for _, x := range v[max(0, len(v)-n):] {
+		if x > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// ntsStyle marks the authenticated (NTS) share of requests.
+var ntsStyle = cyan
 
 func (a *App) drawHelp(w, h int) {
 	lines := []line{{{fmt.Sprintf("%-8s", "Key"), bold}, {"Action", bold}}}

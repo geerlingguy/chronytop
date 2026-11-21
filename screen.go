@@ -6,9 +6,10 @@ import (
 	"strings"
 )
 
-// Style is an SGR color (30-37, or 0 for default) plus bold and dim flags.
+// Style is SGR foreground and background colors (30-37 and 40-47, or 0 for default)
+// plus bold and dim flags.
 type Style struct {
-	FG        uint8
+	FG, BG    uint8
 	Bold, Dim bool
 }
 
@@ -37,6 +38,9 @@ func (s Style) sgr() string {
 	}
 	if s.FG != 0 {
 		fmt.Fprintf(&b, ";%d", s.FG)
+	}
+	if s.BG != 0 {
+		fmt.Fprintf(&b, ";%d", s.BG)
 	}
 	b.WriteByte('m')
 	return b.String()
@@ -94,8 +98,10 @@ func (s *Screen) Box(y, x, h, w int, key, title, extra string) {
 
 const blocks = " ▁▂▃▄▅▆▇█"
 
-// Graph plots the newest values right-aligned, scaled to the visible peak.
-func (s *Screen) Graph(y, x, h, w int, data []float64) {
+// Graph plots the newest values right-aligned, scaled to the visible peak. If part is
+// non-nil, it holds the share of each value (aligned with data's newest entries) to stack
+// at the bottom of each bar in partSt, with the rest in st.
+func (s *Screen) Graph(y, x, h, w int, data, part []float64, st, partSt Style) {
 	if len(data) > w {
 		data = data[len(data)-w:]
 	}
@@ -108,12 +114,31 @@ func (s *Screen) Graph(y, x, h, w int, data []float64) {
 	}
 	bars := []rune(blocks)
 	off := w - len(data)
+	partOff := len(part) - len(data) // index into part for data[0]
 	for i, v := range data {
 		eighths := int(v/peak*float64(h*8) + 0.5)
+		partEighths := 0
+		if j := partOff + i; j >= 0 && j < len(part) {
+			partEighths = min(eighths, int(part[j]/peak*float64(h*8)+0.5))
+		}
 		for r := 0; r < h; r++ {
-			if fill := min(8, max(0, eighths-r*8)); fill > 0 {
-				s.Put(y+h-1-r, x+off+i, string(bars[fill]), green, -1)
+			fill := min(8, max(0, eighths-r*8))
+			if fill == 0 {
+				break
 			}
+			pf := min(8, max(0, partEighths-r*8))
+			cs := st
+			switch {
+			case pf >= fill:
+				cs = partSt
+			case pf > 0 && fill == 8:
+				// The split falls inside a full cell: the lower pf eighths in partSt, the rest as background.
+				fill, cs = pf, Style{FG: partSt.FG, BG: st.FG + 10}
+			case pf*2 >= fill:
+				// The bar ends in the same cell as the split; use the larger share's color.
+				cs = partSt
+			}
+			s.Put(y+h-1-r, x+off+i, string(bars[fill]), cs, -1)
 		}
 	}
 	s.Put(y, x, fmtSI(peak, ""), dim, -1)
