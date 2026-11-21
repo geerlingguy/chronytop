@@ -12,6 +12,9 @@ import (
 
 const (
 	history = 4000
+	// authIndex is "Authenticated NTP packets" in the serverstats counters (chrony 4.0+).
+	// It counts NTS requests, plus any from clients using symmetric keys.
+	authIndex = 7
 	// USER_HZ is 100 on all mainstream Linux architectures.
 	clockTicks = 100
 )
@@ -20,8 +23,10 @@ const (
 type Stats struct {
 	TrackingErr, SourcesErr, ServerErr error
 
-	Iface      string
-	Req, Drop  []float64
+	Iface     string
+	Req, Drop []float64
+	// Auth is authenticated (NTS or symmetric key) requests/s, aligned with Req.
+	Auth       []float64
 	Tracking   *Tracking
 	Sources    []Source
 	Server     []float64
@@ -72,11 +77,7 @@ func (s *Stats) Sample(ctx context.Context, session *chronySession) {
 
 	if p := s.prev; p != nil {
 		dt := now.Sub(p.at).Seconds()
-		// Counters reset when chronyd restarts.
-		if len(s.Server) > 1 && len(p.server) > 1 && s.Server[0] >= p.server[0] {
-			s.Req = appendCapped(s.Req, (s.Server[0]-p.server[0])/dt)
-			s.Drop = appendCapped(s.Drop, (s.Server[1]-p.server[1])/dt)
-		}
+		s.addServerRates(s.Server, p.server, dt)
 		if len(s.Net) == 4 && len(p.net) == 4 {
 			s.NetRate = make([]float64, 4)
 			for i := range s.Net {
@@ -92,6 +93,20 @@ func (s *Stats) Sample(ctx context.Context, session *chronySession) {
 		s.OwnCPU = (snap.ownSecs - p.ownSecs) / dt * 100
 	}
 	s.prev = snap
+}
+
+// addServerRates appends request, drop and authenticated request rates from two serverstats samples.
+func (s *Stats) addServerRates(cur, prev []float64, dt float64) {
+	// Counters reset when chronyd restarts.
+	if len(cur) < 2 || len(prev) < 2 || cur[0] < prev[0] || dt <= 0 {
+		return
+	}
+	req := (cur[0] - prev[0]) / dt
+	s.Req = appendCapped(s.Req, req)
+	s.Drop = appendCapped(s.Drop, (cur[1]-prev[1])/dt)
+	if len(cur) > authIndex && len(prev) > authIndex {
+		s.Auth = appendCapped(s.Auth, min(req, max(0, cur[authIndex]-prev[authIndex])/dt))
+	}
 }
 
 func appendCapped(v []float64, x float64) []float64 {

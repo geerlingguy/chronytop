@@ -91,3 +91,17 @@ func TestServerLinesFieldCounts(t *testing.T) {
 		}
 	}
 }
+
+func TestAddServerRates(t *testing.T) {
+	var s Stats
+	prev := []float64{1000, 10, 0, 0, 0, 0, 0, 400}
+	s.addServerRates([]float64{1100, 12, 0, 0, 0, 0, 0, 430}, prev, 2)
+	if last(s.Req) != 50 || last(s.Drop) != 1 || last(s.Auth) != 15 {
+		t.Errorf("req %v drop %v auth %v", s.Req, s.Drop, s.Auth)
+	}
+	// A chronyd restart resets the counters; skip that sample.
+	s.addServerRates([]float64{5, 0, 0, 0, 0, 0, 0, 1}, prev, 1)
+	if len(s.Req) != 1 || len(s.Auth) != 1 {
+		t.Errorf("reset sample was recorded: %v %v", s.Req, s.Auth)
+	}
+}
