@@ -81,8 +81,9 @@ func TestServerLinesFieldCounts(t *testing.T) {
 		server []float64
 		want   int
 	}{
-		{[]float64{12080, 0, 4958284, 0, 0, 0, 0, 0}, 6},                 // chrony 4.0
-		{[]float64{887837, 13218, 628, 0, 0, 0, 0, 0, 42, 43, 30350}, 7}, // chrony 4.3
+		{[]float64{12080, 0, 4958284, 0, 0, 0, 0, 0}, 6},                    // chrony 4.0
+		{[]float64{887837, 13218, 628, 0, 0, 0, 0, 0, 42, 43, 30350}, 7},    // chrony 4.3
+		{[]float64{887837, 13218, 628, 0, 0, 5, 0, 100, 42, 43, 30350}, 11}, // with NTS
 		{nil, 1},
 	}
 	for _, tc := range cases {
