@@ -167,12 +167,9 @@ func (a *App) requests(y, h, w int) {
 	}
 	extra := fmt.Sprintf(" %s req/s  %savg %s  peak %s  drop %s/s  (%s) ", fmtSI(last(st.Req), ""), ntsPart,
 		fmtSI(avg, ""), fmtSI(peak, ""), fmtSI(last(st.Drop), ""), fmtDur(span.Seconds()))
-	a.scr.Box(y, 0, h, w, "1", "requests", extra)
-	// The NTS figure doubles as the legend for the graph's NTS shade. Box only draws extra
-	// when it fits, so check the same condition.
-	if n := len([]rune(extra)); nts != "" && n+len("requests")+8 < w {
-		i := len([]rune(extra[:strings.Index(extra, nts)]))
-		a.scr.Put(y, w-n-3+i, nts, ntsStyle, -1)
+	// The NTS figure doubles as the legend for the graph's NTS shade.
+	if x := a.scr.Box(y, 0, h, w, "1", "requests", extra); x >= 0 && nts != "" {
+		a.scr.Put(y, x+len([]rune(extra[:strings.Index(extra, nts)])), nts, ntsStyle, -1)
 	}
 	a.scr.Graph(y+1, 1, h-2, w-2, st.Req, st.Auth, green, ntsStyle)
 }

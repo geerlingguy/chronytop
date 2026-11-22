@@ -105,24 +105,20 @@ var serverStatsFields = []struct {
 // serverstats indexes of the NTS-KE counters (chrony 4.0+); authIndex is the third NTS one.
 const ntsKEAccepted, ntsKEDropped = 5, 6
 
-// ntsLines shows NTS counters once chronyd has served NTS (an NTS-KE connection or an
+// ntsLines shows NTS totals once chronyd has served NTS (an NTS-KE connection or an
 // authenticated request since it started), so servers without NTS keep the shorter panel.
+// The NTS rate is in the requests graph's title.
 func ntsLines(st *Stats) []line {
 	s := st.Server
 	if len(s) <= authIndex || (s[ntsKEAccepted] == 0 && s[authIndex] == 0) {
 		return nil
-	}
-	pct := 0.0
-	if r := last(st.Req); r > 0 {
-		pct = last(st.Auth) / r * 100
 	}
 	keDropSt := plain
 	if s[ntsKEDropped] > 0 {
 		keDropSt = yellow
 	}
 	return []line{
-		kv("NTS requests/s", fmt.Sprintf("%s (%.0f%%)", fmtSI(last(st.Auth), ""), pct), ntsStyle.bold()),
-		kv("NTS requests", fmtCount(s[authIndex]), plain),
+		kv("NTS requests", fmtCount(s[authIndex]), ntsStyle),
 		kv("NTS-KE accepted", fmtCount(s[ntsKEAccepted]), plain),
 		kv("NTS-KE dropped", fmtCount(s[ntsKEDropped]), keDropSt),
 	}

@@ -256,9 +256,9 @@ func TestSocketServerVersions(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("serverstats = %v, %v; want %v", got, err, want)
 			}
-			wantLines := 11 // includes the NTS rows; every counter is non-zero
+			wantLines := 10 // includes the NTS rows; every counter is non-zero
 			if tc.count == 8 {
-				wantLines = 10
+				wantLines = 9
 			}
 			if lines := serverLines(&Stats{Server: got}, 80); len(lines) != wantLines {
 				t.Errorf("server panel has %d lines, want %d: %v", len(lines), wantLines, lines)

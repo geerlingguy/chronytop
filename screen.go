@@ -82,7 +82,9 @@ func (s *Screen) Put(y, x int, text string, st Style, maxw int) {
 	}
 }
 
-func (s *Screen) Box(y, x, h, w int, key, title, extra string) {
+// Box draws a titled box, with extra right-aligned in the top border if it fits. It returns
+// the column where extra starts, or -1 if it wasn't drawn.
+func (s *Screen) Box(y, x, h, w int, key, title, extra string) int {
 	s.Put(y, x, "╭"+strings.Repeat("─", w-2)+"╮", blue, -1)
 	for r := 1; r < h-1; r++ {
 		s.Put(y+r, x, "│", blue, -1)
@@ -93,7 +95,9 @@ func (s *Screen) Box(y, x, h, w int, key, title, extra string) {
 	s.Put(y, x+3, title, bold, -1)
 	if n := len([]rune(extra)); extra != "" && n+len(title)+8 < w {
 		s.Put(y, x+w-n-3, extra, dim, -1)
+		return x + w - n - 3
 	}
+	return -1
 }
 
 const blocks = " ▁▂▃▄▅▆▇█"
