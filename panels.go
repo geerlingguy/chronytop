@@ -91,7 +91,7 @@ func serverLines(st *Stats, _ int) []line {
 			lines = append(lines, kv(f.label, fmtCount(s[f.index]), plain))
 		}
 	}
-	return lines
+	return append(lines, ntsLines(st)...)
 }
 
 // Counters in chronyc report order; older chrony versions provide fewer fields (4.0 has 8).
@@ -100,6 +100,28 @@ var serverStatsFields = []struct {
 	label string
 }{
 	{0, "NTP received"}, {1, "NTP dropped"}, {4, "Clientlog dropped"}, {8, "Interleaved NTP"},
+}
+
+// serverstats indexes of the NTS-KE counters (chrony 4.0+); authIndex is the third NTS one.
+const ntsKEAccepted, ntsKEDropped = 5, 6
+
+// ntsLines shows NTS totals once chronyd has served NTS (an NTS-KE connection or an
+// authenticated request since it started), so servers without NTS keep the shorter panel.
+// The NTS rate is in the requests graph's title.
+func ntsLines(st *Stats) []line {
+	s := st.Server
+	if len(s) <= authIndex || (s[ntsKEAccepted] == 0 && s[authIndex] == 0) {
+		return nil
+	}
+	keDropSt := plain
+	if s[ntsKEDropped] > 0 {
+		keDropSt = yellow
+	}
+	return []line{
+		kv("NTS requests", fmtCount(s[authIndex]), ntsStyle),
+		kv("NTS-KE accepted", fmtCount(s[ntsKEAccepted]), plain),
+		kv("NTS-KE dropped", fmtCount(s[ntsKEDropped]), keDropSt),
+	}
 }
 
 func offenderLines(st *Stats, w, maxRows, minPackets int) []line {

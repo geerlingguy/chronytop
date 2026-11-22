@@ -8,6 +8,8 @@ A TUI for [chrony](https://chrony-project.org) NTP time server monitoring, in th
 
 It graphs NTP requests per second, and shows server counters, the clients chrony is rate limiting the most, sources, tracking, bandwidth, and CPU and memory use (including chronyd's).
 
+If the server handles NTS, the requests graph shows the NTS share of each bar in cyan, with the NTS rate in its title, and the server panel adds NTS and NTS-KE counters. These only appear once chronyd has served NTS. chrony counts NTS requests together with symmetric-key ones as "authenticated", so any symmetric-key clients are included.
+
 Panels resize with the terminal, and can be shown or hidden.
 
 ## Requirements
