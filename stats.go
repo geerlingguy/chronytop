@@ -26,21 +26,22 @@ type Stats struct {
 	Iface     string
 	Req, Drop []float64
 	// Auth is authenticated (NTS or symmetric key) requests/s, aligned with Req.
-	Auth       []float64
-	Tracking   *Tracking
-	Sources    []Source
-	Server     []float64
-	Clients    []Client
-	ClientsErr error
-	ClientsAt  time.Time
-	Net        []float64
-	NetRate    []float64
-	CPU        float64
-	ChronydCPU float64
-	OwnCPU     float64
-	MemTotal   float64
-	MemUsed    float64
-	ChronydRSS float64
+	Auth         []float64
+	Tracking     *Tracking
+	Sources      []Source
+	Server       []float64
+	Clients      []Client // top offenders, sorted
+	ClientsTotal int
+	ClientsErr   error
+	ClientsAt    time.Time
+	Net          []float64
+	NetRate      []float64
+	CPU          float64
+	ChronydCPU   float64
+	OwnCPU       float64
+	MemTotal     float64
+	MemUsed      float64
+	ChronydRSS   float64
 
 	chronydPID string
 	prev       *snapshot

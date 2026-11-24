@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 )
@@ -133,15 +132,7 @@ func offenderLines(st *Stats, w, maxRows, minPackets int) []line {
 	case len(st.Clients) == 0:
 		return []line{{{fmt.Sprintf("No clients with ≥%d packets", minPackets), dim}}}
 	}
-	// Most drops first, then most frequent.
-	rows := append([]Client(nil), st.Clients...)
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].Dropped != rows[j].Dropped {
-			return rows[i].Dropped > rows[j].Dropped
-		}
-		return rows[i].Interval < rows[j].Interval
-	})
-	rows = rows[:min(len(rows), max(1, maxRows))]
+	rows := st.Clients[:min(len(st.Clients), max(1, maxRows))]
 	width := nameWidth(w-32, func(yield func(string) bool) {
 		for _, c := range rows {
 			if !yield(c.Name) {
@@ -173,7 +164,7 @@ func offenderLines(st *Stats, w, maxRows, minPackets int) []line {
 		})
 	}
 	return append(lines, line{{fmt.Sprintf("%d clients with ≥%d packets, every %s",
-		len(st.Clients), minPackets, clientsInterval), dim}})
+		st.ClientsTotal, minPackets, clientsInterval), dim}})
 }
 
 func sourcesLines(st *Stats, w int) []line {

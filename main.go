@@ -145,6 +145,7 @@ func (a *App) settings() Settings {
 
 type clientsResult struct {
 	clients []Client
+	total   int
 	err     error
 }
 
@@ -181,13 +182,13 @@ func (a *App) run() {
 				go func() {
 					defer workers.Done()
 					c, err := clientSession.clients(ctx, minPackets)
-					results <- clientsResult{c, err}
+					results <- clientsResult{topOffenders(c), len(c), err}
 				}()
 			}
 			timer.Reset(a.interval)
 		case r := <-results:
 			fetching, nextClients = false, time.Now().Add(clientsInterval)
-			a.stats.Clients, a.stats.ClientsErr, a.stats.ClientsAt = r.clients, r.err, time.Now()
+			a.stats.Clients, a.stats.ClientsTotal, a.stats.ClientsErr, a.stats.ClientsAt = r.clients, r.total, r.err, time.Now()
 		case k, ok := <-keys:
 			if !ok || a.handleKey(k) {
 				return
