@@ -124,6 +124,7 @@ func (s *chronySession) Close() {
 
 type chronySocket struct {
 	conn     net.Conn
+	buf      []byte // reply buffer, reused for every query
 	udp      bool
 	fallback bool
 	deadline time.Time
@@ -319,7 +320,10 @@ func (c *chronySocket) query(command uint16, args ...uint32) ([]byte, uint16, er
 	if err := send(); err != nil {
 		return nil, 0, err
 	}
-	buf := make([]byte, 4096)
+	if c.buf == nil {
+		c.buf = make([]byte, 4096)
+	}
+	buf := c.buf
 	for {
 		n, err := c.conn.Read(buf)
 		if err != nil {

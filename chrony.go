@@ -1,6 +1,10 @@
 package main
 
-import "strconv"
+import (
+	"cmp"
+	"slices"
+	"strconv"
+)
 
 func num(s string) float64 {
 	v, err := strconv.ParseFloat(s, 64)
@@ -35,3 +39,14 @@ type Client struct {
 }
 
 const unknownInterval = 127
+
+// maxOffenders is more rows than any terminal shows.
+const maxOffenders = 200
+
+// topOffenders sorts clients by most drops, then most frequent, and keeps the first maxOffenders.
+func topOffenders(clients []Client) []Client {
+	slices.SortFunc(clients, func(a, b Client) int {
+		return cmp.Or(cmp.Compare(b.Dropped, a.Dropped), cmp.Compare(a.Interval, b.Interval), cmp.Compare(a.Name, b.Name))
+	})
+	return slices.Clone(clients[:min(len(clients), maxOffenders)])
+}

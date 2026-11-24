@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,22 @@ func TestRequestsHeaderNTS(t *testing.T) {
 		}
 		if tc.want != "" && !strings.Contains(header, "10 req/s  "+tc.want+"  avg") {
 			t.Errorf("%s: header %q, want %q", tc.name, header, tc.want)
+		}
+	}
+}
+
+func TestTopOffenders(t *testing.T) {
+	var clients []Client
+	for i := range maxOffenders + 50 {
+		clients = append(clients, Client{Name: fmt.Sprintf("192.0.2.%d", i), Dropped: float64(i % 7), Interval: i % 3})
+	}
+	got := topOffenders(clients)
+	if len(got) != maxOffenders || got[0].Dropped != 6 || got[0].Interval != 0 {
+		t.Fatalf("top offenders: %d, first %+v", len(got), got[0])
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].Dropped > got[i-1].Dropped {
+			t.Fatalf("not sorted by drops at %d: %+v", i, got[i-1:i+1])
 		}
 	}
 }
