@@ -41,13 +41,13 @@ func TestSessionReuseAndDeadlineRenewal(t *testing.T) {
 	if first.sequence != 3 {
 		t.Errorf("sequence did not advance across operations: %d", first.sequence)
 	}
-	if _, err := os.Stat(filepath.Join(first.dir, first.replyDir, "sock")); err != nil {
+	if _, err := os.Stat(first.replyPath); err != nil {
 		t.Fatalf("reply socket was not retained: %v", err)
 	}
 	s.Close()
 	s.Close()
-	if _, err := os.Stat(first.dir); !os.IsNotExist(err) {
-		t.Errorf("reply directory remains after shutdown: %v", err)
+	if _, err := os.Stat(first.replyPath); !os.IsNotExist(err) {
+		t.Errorf("reply socket remains after shutdown: %v", err)
 	}
 }
 
@@ -64,15 +64,15 @@ func TestSessionReconnectAfterFailure(t *testing.T) {
 			}
 			s := &chronySession{address: fakeChrony(t, bad, step)}
 			defer s.Close()
-			var oldDir string
+			var oldPath string
 			err := s.run(context.Background(), 50*time.Millisecond, func(c *chronySocket) error {
-				oldDir = c.dir
+				oldPath = c.replyPath
 				return queryTracking(c)
 			})
 			if err == nil || s.socket != nil {
 				t.Fatalf("failed socket was retained: %v", err)
 			}
-			if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+			if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
 				t.Fatalf("failed reply socket remains: %v", err)
 			}
 			if err := s.run(context.Background(), time.Second, queryTracking); err != nil {
@@ -123,7 +123,7 @@ func TestSessionDaemonRestart(t *testing.T) {
 	if err := s.run(context.Background(), time.Second, queryTracking); err != nil {
 		t.Fatal(err)
 	}
-	oldDir := s.socket.dir
+	oldPath := s.socket.replyPath
 	_ = first.Close()
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
@@ -135,11 +135,11 @@ func TestSessionDaemonRestart(t *testing.T) {
 	if err := s.run(context.Background(), time.Second, queryTracking); err != nil {
 		t.Fatalf("did not reconnect to restarted daemon: %v", err)
 	}
-	if s.socket.dir == oldDir {
+	if s.socket.replyPath == oldPath {
 		t.Fatal("old reply socket was reused after restart")
 	}
-	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
-		t.Errorf("old directory remains: %v", err)
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Errorf("old reply socket remains: %v", err)
 	}
 }
 

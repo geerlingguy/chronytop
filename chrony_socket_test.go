@@ -413,8 +413,8 @@ func TestSocketReconnectAndCleanup(t *testing.T) {
 	}
 	c.Close()
 	c.Close() // Closing twice must not remove unrelated descriptors or files.
-	if _, err := os.Stat(c.dir); !os.IsNotExist(err) {
-		t.Errorf("socket directory remains: %v", err)
+	if _, err := os.Stat(c.replyPath); !os.IsNotExist(err) {
+		t.Errorf("reply socket remains: %v", err)
 	}
 }
 
