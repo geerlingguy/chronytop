@@ -216,14 +216,12 @@ func (c *chronySocket) connectUnix(path string) error {
 		return fmt.Errorf("connect to chronyd at %s: %w", path, err)
 	}
 	c.conn = conn
-	var st syscall.Stat_t
-	if err := syscall.Lstat(fmt.Sprintf("/proc/self/fd/%d/%s", c.parentFD, c.replyName), &st); err != nil {
-		_ = syscall.Unlinkat(c.parentFD, c.replyName)
-		return err
-	}
-	if st.Mode&0o777 != 0o666 {
-		_ = syscall.Unlinkat(c.parentFD, c.replyName)
-		return fmt.Errorf("unexpected reply socket mode %o", st.Mode&0o777)
+	st, ok := c.statReply()
+	if !ok || st.Mode&syscall.S_IFMT != syscall.S_IFSOCK || st.Mode&0o777 != 0o666 {
+		c.removeFreshReply()
+		_ = conn.Close()
+		c.conn = nil
+		return errors.New("reply socket is missing or has unexpected permissions")
 	}
 	c.replyDev, c.replyIno = uint64(st.Dev), uint64(st.Ino)
 	return nil
@@ -233,6 +231,8 @@ func dialReplySocket(local, remote string) (*net.UnixConn, error) {
 	replySocketMu.Lock()
 	defer replySocketMu.Unlock()
 	// 0777 &^ 0111 = 0666, so chronyd can send the reply. Restored immediately.
+	// umask is process-wide, but nothing else creates files while sessions run:
+	// settings are saved only after run() has closed them.
 	old := syscall.Umask(0o111)
 	defer syscall.Umask(old)
 	return net.DialUnix("unixgram", &net.UnixAddr{Name: local, Net: "unixgram"},
