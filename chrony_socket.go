@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 )
+
+// replySocketMu covers the process-wide umask change around bind.
+var replySocketMu sync.Mutex
 
 // Wire layout references (protocol version 6):
 // https://github.com/mlichvar/chrony/blob/4.9/candm.h
@@ -123,18 +126,17 @@ func (s *chronySession) Close() {
 }
 
 type chronySocket struct {
-	conn     net.Conn
-	buf      []byte // reply buffer, reused for every query
-	udp      bool
-	fallback bool
-	deadline time.Time
-	dir      string
-	dirFD    int
-	parentFD int
-	dirFile  *os.File
-	replyDir string
-	replyFD  int
-	sequence uint32
+	conn      net.Conn
+	buf       []byte // reply buffer, reused for every query
+	udp       bool
+	fallback  bool
+	deadline  time.Time
+	parentFD  int
+	replyName string // basename of the reply socket, beside chronyd's socket
+	replyPath string
+	replyDev  uint64
+	replyIno  uint64
+	sequence  uint32
 }
 
 func openChronyUDP(ctx context.Context, address string, deadline time.Time) (*chronySocket, error) {
@@ -150,7 +152,7 @@ func openChronyUDP(ctx context.Context, address string, deadline time.Time) (*ch
 		_ = conn.Close()
 		return nil, err
 	}
-	return &chronySocket{conn: conn, udp: true, parentFD: -1, dirFD: -1, replyFD: -1, sequence: wire.Uint32(sequence[:])}, nil
+	return &chronySocket{conn: conn, udp: true, parentFD: -1, sequence: wire.Uint32(sequence[:])}, nil
 }
 
 func openChrony(path string) (*chronySocket, error) {
@@ -174,56 +176,28 @@ func prepareChronySocket(path string) (*chronySocket, error) {
 	// O_PATH requires search permission, not permission to list the parent.
 	parent, err := syscall.Open(filepath.Dir(path), linuxOPath|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("create reply socket directory (check permissions or use sudo): %w", err)
+		return nil, fmt.Errorf("open chronyd socket directory (check permissions or use sudo): %w", err)
 	}
-	c := &chronySocket{parentFD: parent, dirFD: -1, replyFD: -1}
+	c := &chronySocket{parentFD: parent}
 	ok := false
 	defer func() {
 		if !ok {
 			c.Close()
 		}
 	}()
-	// Pin the parent so creation and cleanup cannot be redirected by renames.
-	var random [8]byte
+	// One path component, not a private subdirectory. Debian and Ubuntu ship an
+	// AppArmor profile that allows chronyd to reply to @{run}/chrony/{,*} and
+	// denies sendmsg into a nested directory, so the reply never arrives.
+	// Pin the parent so cleanup cannot be redirected onto a replaced directory.
+	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return nil, err
 	}
-	name := fmt.Sprintf(".chronytop-%x", random)
-	if err := syscall.Mkdirat(parent, name, 0o700); err != nil {
-		return nil, fmt.Errorf("create reply socket directory (check permissions or use sudo): %w", err)
-	}
-	c.dir = filepath.Join(filepath.Dir(path), name)
-	fd, err := syscall.Openat(parent, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
-	}
-	var st syscall.Stat_t
-	if err := syscall.Fstat(fd, &st); err != nil {
-		_ = syscall.Close(fd)
-		return nil, err
-	}
-	if int64(st.Uid) != int64(os.Geteuid()) || st.Mode&0o777 != 0o700 {
-		_ = syscall.Close(fd)
-		return nil, errors.New("unsafe reply socket directory")
-	}
-	c.dirFD = fd
-	c.dirFile = os.NewFile(uintptr(fd), c.dir)
-	// Like chronyc, hide a random inner name in a non-listable outer directory.
-	// The daemon's user can rename the outer directory but cannot reproduce this
-	// path in a replacement directory between our checks and bind().
-	// See https://github.com/mlichvar/chrony/blob/4.9/client.c (open_unix_socket).
-	var secret [16]byte
-	if _, err := rand.Read(secret[:]); err != nil {
-		return nil, err
-	}
-	inner := fmt.Sprintf("%x", secret)
-	if err := syscall.Mkdirat(fd, inner, 0o700); err != nil {
-		return nil, err
-	}
-	c.replyDir = inner
-	c.replyFD, err = syscall.Openat(fd, inner, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
+	c.replyName = fmt.Sprintf(".chronytop-%x", random)
+	c.replyPath = filepath.Join(filepath.Dir(path), c.replyName)
+	// sockaddr_un.sun_path holds 108 bytes including the terminating NUL.
+	if len(c.replyPath) >= 108 {
+		return nil, errors.New("chronyd socket path is too long for a reply socket")
 	}
 	ok = true
 	return c, nil
@@ -232,55 +206,85 @@ func prepareChronySocket(path string) (*chronySocket, error) {
 func (c *chronySocket) connectUnix(path string) error {
 	// Use the real pathname for bind: chronyd resolves the return address in its
 	// own process, so a /proc/self/fd path would point at the daemon's descriptors.
-	conn, err := net.DialUnix("unixgram", &net.UnixAddr{Name: filepath.Join(c.dir, c.replyDir, "sock"), Net: "unixgram"},
-		&net.UnixAddr{Name: path, Net: "unixgram"})
+	// Socket permissions come from umask at bind. fchmod on the descriptor
+	// changes the sockfs inode, not the directory entry chronyd sends to.
+	conn, err := dialReplySocket(c.replyPath, path)
 	if err != nil {
+		// Bind succeeds before connect. A failed connect leaves the reply
+		// socket behind; a failed bind must not delete a name we did not create.
+		c.removeFreshReply()
 		return fmt.Errorf("connect to chronyd at %s: %w", path, err)
 	}
 	c.conn = conn
-	// chronyd normally runs as another user. Allow it to traverse the private
-	// directory and send replies, without allowing it to list or modify it.
-	// The directory is still 0700 and pinned by fd, so no other user can
-	// substitute a symlink. flags=0 also supports kernels before fchmodat2.
-	if err := syscall.Fchmodat(c.replyFD, "sock", 0o666, 0); err != nil {
-		return err
+	st, ok := c.statReply()
+	if !ok || st.Mode&syscall.S_IFMT != syscall.S_IFSOCK || st.Mode&0o777 != 0o666 {
+		c.removeFreshReply()
+		_ = conn.Close()
+		c.conn = nil
+		return errors.New("reply socket is missing or has unexpected permissions")
 	}
-	if err := syscall.Fchmod(c.replyFD, 0o711); err != nil {
-		return err
-	}
-	return syscall.Fchmod(c.dirFD, 0o711)
+	c.replyDev, c.replyIno = uint64(st.Dev), uint64(st.Ino)
+	return nil
+}
+
+func dialReplySocket(local, remote string) (*net.UnixConn, error) {
+	replySocketMu.Lock()
+	defer replySocketMu.Unlock()
+	// 0777 &^ 0111 = 0666, so chronyd can send the reply. Restored immediately.
+	// umask is process-wide, but nothing else creates files while sessions run:
+	// settings are saved only after run() has closed them.
+	old := syscall.Umask(0o111)
+	defer syscall.Umask(old)
+	return net.DialUnix("unixgram", &net.UnixAddr{Name: local, Net: "unixgram"},
+		&net.UnixAddr{Name: remote, Net: "unixgram"})
 }
 
 func (c *chronySocket) Close() {
+	c.removeReplySocket()
 	if c.conn != nil {
 		_ = c.conn.Close()
-	}
-	// Never recursively remove a directory owned by the daemon.
-	if c.replyFD >= 0 {
-		_ = syscall.Unlinkat(c.replyFD, "sock")
-		_ = syscall.Close(c.replyFD)
-		c.replyFD = -1
-	}
-	if c.dirFile != nil {
-		if c.replyDir != "" {
-			// Here /proc/self/fd is resolved by our own process, not chronyd.
-			_ = os.Remove(fmt.Sprintf("/proc/self/fd/%d/%s", c.dirFD, c.replyDir))
-		}
-		// Avoid removing an already replaced directory. Removal stays nonrecursive
-		// even if the parent owner renames it again after this identity check.
-		original, err := c.dirFile.Stat()
-		path := fmt.Sprintf("/proc/self/fd/%d/%s", c.parentFD, filepath.Base(c.dir))
-		current, statErr := os.Lstat(path)
-		if err == nil && statErr == nil && os.SameFile(original, current) {
-			_ = os.Remove(path)
-		}
-		_ = c.dirFile.Close()
-		c.dirFile, c.dirFD = nil, -1
+		c.conn = nil
 	}
 	if c.parentFD >= 0 {
 		_ = syscall.Close(c.parentFD)
 		c.parentFD = -1
 	}
+}
+
+// removeFreshReply unlinks a reply socket left behind by a failed dial.
+// It ignores names this process did not bind, including a symlink or file
+// planted at the reply path.
+func (c *chronySocket) removeFreshReply() {
+	st, ok := c.statReply()
+	if !ok || st.Mode&syscall.S_IFMT != syscall.S_IFSOCK || st.Mode&0o777 != 0o666 || int(st.Uid) != syscall.Geteuid() {
+		return
+	}
+	_ = syscall.Unlinkat(c.parentFD, c.replyName)
+}
+
+// removeReplySocket unlinks the reply socket only when the directory entry is
+// still the inode we bound. The parent is owned by chronyd, which can replace
+// the name; that replacement is left alone.
+func (c *chronySocket) removeReplySocket() {
+	if c.parentFD < 0 || c.replyName == "" || c.replyIno == 0 {
+		return
+	}
+	current, ok := c.statReply()
+	if !ok || uint64(current.Dev) != c.replyDev || uint64(current.Ino) != c.replyIno {
+		return
+	}
+	_ = syscall.Unlinkat(c.parentFD, c.replyName)
+}
+
+func (c *chronySocket) statReply() (syscall.Stat_t, bool) {
+	var st syscall.Stat_t
+	if c.parentFD < 0 || c.replyName == "" {
+		return st, false
+	}
+	// Resolve through the pinned directory fd. Lstat does not follow a symlink
+	// that has replaced the reply socket.
+	err := syscall.Lstat(fmt.Sprintf("/proc/self/fd/%d/%s", c.parentFD, c.replyName), &st)
+	return st, err == nil
 }
 
 // query sends only the read-only commands used by this dashboard.

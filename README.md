@@ -93,7 +93,7 @@ Since it usually runs as root, chronytop:
 
 - Only sends read-only monitoring commands to chronyd, and never resets its counters or runs other programs.
 - Only reads local stats from `/proc`, and only uses UDP with `-host` or the localhost fallback.
-- Creates its reply socket in a private, randomly named directory beside chronyd's socket, and removes it on exit.
+- Creates its reply socket beside chronyd's socket, under a random name, and removes it on exit.
 - Only writes its settings file, and only if you changed a setting. It skips the file and its directories unless they're owned by the user running chronytop (so a non-root `HOME` under `sudo` is ignored), and saves through a temporary file, so it never follows a symlink.
 - Strips non-printable characters from everything it displays, so data from chrony can't inject terminal escape sequences.
 

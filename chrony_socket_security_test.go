@@ -1,13 +1,29 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestSocketDirectoryReplacement(t *testing.T) {
-	for _, replacement := range []string{"directory", "symlink"} {
+func TestReplySocketStaysBesideChronyd(t *testing.T) {
+	path := fakeChrony(t)
+	c := connectTest(t, path)
+	if filepath.Dir(c.replyPath) != filepath.Dir(path) {
+		t.Fatalf("reply socket %s is not beside %s", c.replyPath, path)
+	}
+	if filepath.Base(c.replyPath) != c.replyName || len(c.replyName) < 16 {
+		t.Fatalf("unexpected reply name %q", c.replyName)
+	}
+	info, err := os.Stat(c.replyPath)
+	if err != nil || info.Mode().Perm() != 0o666 || info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("reply socket mode: %v, %v", info, err)
+	}
+}
+
+func TestReplyNameReplacement(t *testing.T) {
+	for _, replacement := range []string{"file", "symlink"} {
 		t.Run(replacement, func(t *testing.T) {
 			path := fakeChrony(t)
 			c, err := prepareChronySocket(path)
@@ -15,31 +31,29 @@ func TestSocketDirectoryReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer c.Close()
-			moved := c.dir + ".moved"
-			if err := os.Rename(c.dir, moved); err != nil {
+			secret := filepath.Join(t.TempDir(), "secret")
+			if err := os.WriteFile(secret, []byte("keep"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			defer os.RemoveAll(moved)
-			if replacement == "directory" {
-				err = os.Mkdir(c.dir, 0o700)
+			if replacement == "file" {
+				err = os.WriteFile(c.replyPath, []byte("occupied"), 0o640)
 			} else {
-				// A link to the daemon's directory must not redirect bind or chmod.
-				err = os.Symlink(filepath.Dir(path), c.dir)
+				err = os.Symlink(secret, c.replyPath)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer os.Remove(c.dir)
+			t.Cleanup(func() { _ = os.Remove(c.replyPath) })
 			if err := c.connectUnix(path); err == nil {
-				t.Fatal("bound a socket through the replacement directory")
+				t.Fatal("bound a socket through the replacement")
+			}
+			info, err := os.Stat(secret)
+			if err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("replacement redirected chmod: %v, %v", info, err)
 			}
 			c.Close()
-			if _, err := os.Lstat(c.dir); err != nil {
+			if _, err := os.Lstat(c.replyPath); err != nil {
 				t.Errorf("removed the replacement: %v", err)
-			}
-			entries, err := os.ReadDir(moved)
-			if err != nil || len(entries) != 0 {
-				t.Errorf("did not clean up the pinned original: %v, %v", entries, err)
 			}
 		})
 	}
@@ -51,11 +65,13 @@ func TestSocketCleanupAfterParentRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(parent)
-	c, err := prepareChronySocket(filepath.Join(parent, "chronyd.sock"))
+	socketPath := filepath.Join(parent, "chronyd.sock")
+	server, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: socketPath, Net: "unixgram"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer server.Close()
+	c := connectTest(t, socketPath)
 	moved := parent + ".moved"
 	if err := os.Rename(parent, moved); err != nil {
 		t.Fatal(err)
@@ -64,50 +80,37 @@ func TestSocketCleanupAfterParentRename(t *testing.T) {
 	if err := os.Mkdir(parent, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(c.dir, 0o700); err != nil {
+	defer os.RemoveAll(parent)
+	planted := filepath.Join(parent, c.replyName)
+	if err := os.WriteFile(planted, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c.Close()
-	if _, err := os.Stat(c.dir); err != nil {
-		t.Errorf("modified the replacement parent: %v", err)
+	if data, err := os.ReadFile(planted); err != nil || string(data) != "keep" {
+		t.Errorf("removed the replacement parent's file: %q, %v", data, err)
 	}
-	entries, err := os.ReadDir(moved)
-	if err != nil || len(entries) != 0 {
-		t.Errorf("did not clean up the original parent: %v, %v", entries, err)
+	if _, err := os.Stat(filepath.Join(moved, c.replyName)); !os.IsNotExist(err) {
+		t.Errorf("left the reply socket in the original parent: %v", err)
 	}
 }
 
 func TestSocketCleanupAfterBindAndRename(t *testing.T) {
 	c := connectTest(t, fakeChrony(t))
-	for path, mode := range map[string]os.FileMode{
-		c.dir:                                    0o711,
-		filepath.Join(c.dir, c.replyDir):         0o711,
-		filepath.Join(c.dir, c.replyDir, "sock"): 0o666,
-	} {
-		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != mode {
-			t.Fatalf("unexpected reply permissions for %s: %v, %v", path, info, err)
-		}
-	}
-	moved := c.dir + ".moved"
-	if err := os.Rename(c.dir, moved); err != nil {
+	moved := c.replyPath + ".moved"
+	if err := os.Rename(c.replyPath, moved); err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(moved)
-	if err := os.Mkdir(c.dir, 0o700); err != nil {
+	defer os.Remove(moved)
+	if err := os.WriteFile(c.replyPath, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(c.dir)
-	sentinel := filepath.Join(c.dir, "unrelated")
-	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	defer os.Remove(c.replyPath)
 	c.Close()
-	entries, err := os.ReadDir(moved)
-	if err != nil || len(entries) != 0 {
-		t.Errorf("reply socket remains in renamed directory: %v, %v", entries, err)
+	info, err := os.Stat(c.replyPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("cleanup changed the replacement: %v, %v", info, err)
 	}
-	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "keep" {
+	if data, err := os.ReadFile(c.replyPath); err != nil || string(data) != "keep" {
 		t.Errorf("modified unrelated file: %q, %v", data, err)
 	}
 }

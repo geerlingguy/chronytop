@@ -83,7 +83,7 @@ func TestUDPSamplingAndPersistence(t *testing.T) {
 				if err != nil || len(clients) != 1 || clients[0].Packets != 2100 {
 					t.Fatalf("UDP clients: %+v, %v", clients, err)
 				}
-				if s.socket.dir != "" || s.socket.dirFD != -1 {
+				if s.socket.replyPath != "" || s.socket.parentFD != -1 {
 					t.Fatal("UDP created filesystem state")
 				}
 				if stats.MemTotal == 0 {
